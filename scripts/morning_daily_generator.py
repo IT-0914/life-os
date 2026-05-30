@@ -651,10 +651,11 @@ def scan_previous_daily_and_sync(yesterday: datetime.date):
         print(f"      [TODO] {name}")
 
 
-def scan_previous_daily_tags(yesterday: datetime.date):
+def scan_previous_daily_tags(yesterday: datetime.date, today_page_id: str = ""):
     """
     前日のデイリーノートのタグ（#調査・#メール・#タスク）をスキャンして自動実行する。
-    scan_previous_daily_and_sync() の後に呼び出す。
+    処理結果は当日（翌日）のデイリーページに追記する。
+    scan_previous_daily_and_sync() の後、当日ページ作成後に呼び出す。
     """
     if not TAG_PROCESSOR_AVAILABLE:
         print("      → tag_processor 未利用可能（スキップ）")
@@ -717,8 +718,21 @@ def scan_previous_daily_tags(yesterday: datetime.date):
         print(f"      → ページ本文パースエラー: {e}")
         return
 
-    # タグ処理を実行
-    processed = process_tags_in_daily(page_id, page_text, TASK_DS_ID, PROJ_DS_ID)
+    # 当日ページIDがない場合はスキップ
+    if not today_page_id:
+        print("      → 当日ページIDが未設定（スキップ）")
+        return
+
+    # タグ処理を実行（結果は当日ページに追記）
+    yesterday_str = yesterday.strftime("%Y-%m-%d")
+    processed = process_tags_in_daily(
+        yesterday_page_id=page_id,
+        yesterday_page_text=page_text,
+        today_page_id=today_page_id,
+        task_ds_id=TASK_DS_ID,
+        proj_ds_id=PROJ_DS_ID,
+        yesterday_str=yesterday_str
+    )
     if processed:
         print(f"      → {len(processed)}件のタグを処理しました")
         for item in processed:
@@ -737,9 +751,6 @@ def main():
 
     # 0. 前日スキャン → TASK DB同期
     scan_previous_daily_and_sync(yesterday)
-
-    # 0b. 前日デイリーのタグ自動実行（#調査・#メール・#タスク）
-    scan_previous_daily_tags(yesterday)
 
     # 1. 未完了タスク取得
     print("[1/6] 未完了タスクを取得中...")
@@ -798,7 +809,10 @@ def main():
     if pending_tasks:
         print("[7/7] MIGRATEDフラグを更新中...")
         mark_tasks_migrated(pending_tasks)
-    
+
+    # 0b. 前日デイリーのタグ自動実行（当日ページに結果を追記）
+    scan_previous_daily_tags(yesterday, today_page_id=daily_page_id)
+
     print(f"\n✅ 完了: デイリーノート {today} を生成しました")
 
 

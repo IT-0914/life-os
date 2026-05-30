@@ -2,12 +2,13 @@
 tag_processor.py
 ================
 Notionデイリーノートのタグ自動実行モジュール。
-デイリーページ全体のテキストをスキャンし、未処理タグを検出して実行する。
+前日デイリーページ全体のテキストをスキャンし、未処理タグを検出して実行する。
+実行結果は「当日（翌日）のデイリーページ」に出力する。
 
 対応タグ:
-  #調査  → Web調査してデイリーのLOGに結果を書き戻す
-  #メール → Gmail下書きを作成してデイリーに記録
-  #タスク → TASK DBに自動登録してデイリーに記録
+  #調査  → Web調査して当日デイリーのSORA REPORTセクションに追記
+  #メール → Gmail下書きを作成して当日デイリーに記録
+  #タスク → TASK DBに自動登録して当日デイリーに記録
 
 タグ書式:
   <指示内容> #タグ名
@@ -15,8 +16,9 @@ Notionデイリーノートのタグ自動実行モジュール。
   例: 「田中部長にプロジェクト進捗報告をメール #メール」
   例: 「ランディングページのワイヤーフレームを作る #タスク」
 
-処理済みタグ:
-  実行後、タグを「<!-- #タグ名 処理済み YYYY-MM-DD -->」に置換して再実行を防ぐ。
+出力先:
+  当日（翌日）のデイリーページに「## 🤖 SORA REPORT」セクションとして追記する。
+  前日ページは変更しない。
 """
 
 import json
@@ -84,11 +86,6 @@ TAG_PATTERN = re.compile(
     re.MULTILINE
 )
 
-PROCESSED_PATTERN = re.compile(
-    r'(.+?)\s+<!--\s*(#調査|#メール|#タスク)\s*処理済み.*?-->',
-    re.MULTILINE
-)
-
 def extract_tags(text: str) -> list[dict]:
     """
     テキストからタグ付き指示を抽出する。
@@ -114,28 +111,26 @@ def extract_tags(text: str) -> list[dict]:
 
 
 # ============================================================
-# タグ別処理
+# タグ別処理（結果テキストを返す）
 # ============================================================
 
-def process_調査(instruction: str) -> str:
+def process_調査(instruction: str, yesterday_str: str) -> str:
     """#調査: Web調査して結果テキストを返す"""
     print(f"  [#調査] 調査中: {instruction}")
     result = search_web(instruction)
-    today = datetime.datetime.now(JST).strftime("%Y-%m-%d")
     return (
-        f"\n\n> **[#調査 結果 {today}]**\n"
-        f"> 調査内容: {instruction}\n>\n"
+        f"### 🔍 #調査 — {instruction}\n"
+        f"> 元ページ: {yesterday_str}\n>\n"
         + "\n".join(f"> {line}" for line in result.splitlines())
         + "\n"
     )
 
 
-def process_メール(instruction: str) -> str:
+def process_メール(instruction: str, yesterday_str: str) -> str:
     """#メール: Gmail下書きを作成して結果テキストを返す"""
     print(f"  [#メール] 下書き作成中: {instruction}")
     today = datetime.datetime.now(JST).strftime("%Y-%m-%d")
 
-    # メール本文を生成（SORAスタイル）
     subject = f"【ご連絡】{instruction[:30]}"
     body = (
         f"お疲れ様です。\n\n"
@@ -144,37 +139,35 @@ def process_メール(instruction: str) -> str:
     )
 
     try:
-        # Gmail MCPで下書き作成
         result = mcp_call(
             "gmail_create_draft",
             "gmail",
             {
-                "to": "",  # 宛先は空（TAKUMIが後で設定）
+                "to": "",
                 "subject": subject,
                 "body": body
             }
         )
         draft_id = result.get("id", "（ID取得失敗）")
         return (
-            f"\n\n> **[#メール 下書き作成済み {today}]**\n"
+            f"### 📧 #メール — {instruction}\n"
+            f"> 元ページ: {yesterday_str}\n"
             f"> 件名: {subject}\n"
-            f"> 指示: {instruction}\n"
             f"> Gmail下書きID: {draft_id}\n"
             f"> → Gmailを開いて宛先・本文を確認・編集してください\n"
         )
     except Exception as e:
         return (
-            f"\n\n> **[#メール 下書き作成失敗 {today}]**\n"
-            f"> 指示: {instruction}\n"
-            f"> エラー: {str(e)[:100]}\n"
+            f"### 📧 #メール — {instruction}\n"
+            f"> 元ページ: {yesterday_str}\n"
+            f"> ❌ 下書き作成失敗: {str(e)[:100]}\n"
             f"> → 手動でGmailから作成してください\n"
         )
 
 
-def process_タスク(instruction: str, task_ds_id: str, proj_ds_id: str) -> str:
+def process_タスク(instruction: str, task_ds_id: str, proj_ds_id: str, yesterday_str: str) -> str:
     """#タスク: TASK DBに登録して結果テキストを返す"""
     print(f"  [#タスク] TASK DB登録中: {instruction}")
-    today = datetime.datetime.now(JST).strftime("%Y-%m-%d")
 
     try:
         result = mcp_call(
@@ -190,16 +183,17 @@ def process_タスク(instruction: str, task_ds_id: str, proj_ds_id: str) -> str
             }
         )
         page_url = result.get("url", "")
+        task_link = f"[{instruction}]({page_url})" if page_url else instruction
         return (
-            f"\n\n> **[#タスク 登録済み {today}]**\n"
-            f"> タスク名: {instruction}\n"
-            f"> TASK DB: {page_url if page_url else '登録完了'}\n"
+            f"### ✅ #タスク — {task_link}\n"
+            f"> 元ページ: {yesterday_str}\n"
+            f"> TASK DBに登録しました\n"
         )
     except Exception as e:
         return (
-            f"\n\n> **[#タスク 登録失敗 {today}]**\n"
-            f"> タスク名: {instruction}\n"
-            f"> エラー: {str(e)[:100]}\n"
+            f"### ✅ #タスク — {instruction}\n"
+            f"> 元ページ: {yesterday_str}\n"
+            f"> ❌ 登録失敗: {str(e)[:100]}\n"
             f"> → 手動でTASK DBに登録してください\n"
         )
 
@@ -208,53 +202,80 @@ def process_タスク(instruction: str, task_ds_id: str, proj_ds_id: str) -> str
 # メイン処理
 # ============================================================
 
-def process_tags_in_daily(page_id: str, page_text: str, task_ds_id: str, proj_ds_id: str) -> list[dict]:
+def process_tags_in_daily(
+    yesterday_page_id: str,
+    yesterday_page_text: str,
+    today_page_id: str,
+    task_ds_id: str,
+    proj_ds_id: str,
+    yesterday_str: str = ""
+) -> list[dict]:
     """
-    デイリーページのテキストからタグを検出して処理し、
-    結果をページに追記する。
+    前日デイリーページのテキストからタグを検出して処理し、
+    結果を当日（翌日）のデイリーページに「## 🤖 SORA REPORT」セクションとして追記する。
+
+    Args:
+        yesterday_page_id: 前日デイリーページID（参照のみ・変更しない）
+        yesterday_page_text: 前日デイリーページのテキスト
+        today_page_id: 当日デイリーページID（結果の出力先）
+        task_ds_id: TASK DB データソースID
+        proj_ds_id: PROJECT DB データソースID
+        yesterday_str: 前日の日付文字列（表示用）
 
     Returns: 処理したタグのリスト
     """
-    tags = extract_tags(page_text)
+    tags = extract_tags(yesterday_page_text)
     if not tags:
         print("  タグなし。スキップ。")
         return []
 
     print(f"  {len(tags)}件のタグを検出: {[t['tag'] for t in tags]}")
     processed = []
+    report_sections = []
 
     for item in tags:
         instruction = item["instruction"]
         tag = item["tag"]
-        result_text = ""
+        section_text = ""
 
         if tag == "#調査":
-            result_text = process_調査(instruction)
+            section_text = process_調査(instruction, yesterday_str)
         elif tag == "#メール":
-            result_text = process_メール(instruction)
+            section_text = process_メール(instruction, yesterday_str)
         elif tag == "#タスク":
-            result_text = process_タスク(instruction, task_ds_id, proj_ds_id)
+            section_text = process_タスク(instruction, task_ds_id, proj_ds_id, yesterday_str)
 
-        if result_text:
-            # 結果をページに追記
-            try:
-                today = datetime.datetime.now(JST).strftime("%Y-%m-%d")
-                processed_marker = f"<!-- {tag} 処理済み {today} -->"
-                append_text = result_text
-                mcp_call(
-                    "notion-update-page",
-                    "notion",
-                    {
-                        "id": page_id,
-                        "content": append_text,
-                        "command": "append_content"
-                    }
-                )
-                processed.append({"tag": tag, "instruction": instruction, "status": "success"})
-                print(f"  ✅ {tag} 処理完了・結果を追記")
-            except Exception as e:
-                print(f"  ❌ {tag} 結果追記失敗: {e}")
-                processed.append({"tag": tag, "instruction": instruction, "status": "error", "error": str(e)})
+        if section_text:
+            report_sections.append(section_text)
+            processed.append({"tag": tag, "instruction": instruction, "status": "success"})
+
+    if not report_sections:
+        return processed
+
+    # 当日デイリーページに「## 🤖 SORA REPORT」セクションとして一括追記
+    today = datetime.datetime.now(JST).strftime("%Y-%m-%d")
+    report_content = (
+        f"\n---\n\n"
+        f"## 🤖 SORA REPORT ({yesterday_str} のタグ処理結果)\n\n"
+        + "\n".join(report_sections)
+    )
+
+    try:
+        mcp_call(
+            "notion-update-page",
+            "notion",
+            {
+                "id": today_page_id,
+                "content": report_content,
+                "command": "append_content"
+            }
+        )
+        print(f"  ✅ 当日デイリーページ（{today_page_id[:8]}...）にSORA REPORTを追記しました")
+    except Exception as e:
+        print(f"  ❌ 当日デイリーページへの追記失敗: {e}")
+        for item in processed:
+            item["status"] = "error"
+            item["error"] = str(e)
 
     return processed
 
