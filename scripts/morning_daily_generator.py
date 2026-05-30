@@ -1138,10 +1138,15 @@ def main():
         "--server", "notion",
         "--input", json.dumps({
             "page_id": daily_page_id,
-            "content": content
+            "command": "replace_content",
+            "new_str": content
         }, ensure_ascii=False)
     ]
-    subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("      → コンテンツ更新完了")
+    else:
+        print(f"      [WARN] コンテンツ更新失敗: {result.stderr[:200]}")
     
     # 7. MIGRATEDフラグ更新
     if pending_tasks:
