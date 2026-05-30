@@ -18,10 +18,14 @@ import sys
 # ============================================================
 # 設定
 # ============================================================
-DAILY_DS_ID = "f9b89321-f903-4167-b022-0787096ea6f3"
-TASK_DS_ID  = "47ae00b4-956c-4fa4-a786-af39a5b33067"
-PROJ_DS_ID  = "eadd59d6-f0d5-4356-bc13-76aeab13c0ec"
-DAILY_DB_ID = "77de58c499d14be9817ebd539c551eb0"
+DAILY_DS_ID  = "f9b89321-f903-4167-b022-0787096ea6f3"
+TASK_DS_ID   = "47ae00b4-956c-4fa4-a786-af39a5b33067"
+PROJ_DS_ID   = "eadd59d6-f0d5-4356-bc13-76aeab13c0ec"
+DAILY_DB_ID  = "77de58c499d14be9817ebd539c551eb0"
+DAILY_DB_URL = "https://www.notion.so/77de58c499d14be9817ebd539c551eb0"
+TASK_DB_URL  = "https://www.notion.so/6135d9e113d64fba81c4d12d3ac24bfe"
+PROJ_DB_URL  = "https://www.notion.so/ae6d2424256c47249c5cdccf644560bc"
+DB_HUB_URL   = "https://www.notion.so/370200b3cc70817d9fcad1c4190f79fe"
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -364,7 +368,13 @@ def build_daily_content(
     is_friday = today.weekday() == 4
     
     lines = []
-    
+
+    # ── ナビゲーション ──
+    lines.append(f"[✅ TASK]({TASK_DB_URL})　　[🚀 PROJECT]({PROJ_DB_URL})　　[📅 DAILY一覧]({DAILY_DB_URL})　　[🗄 DB HUB]({DB_HUB_URL})")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
     # ── SCHEDULE ──
     lines.append("## 📅 SCHEDULE")
     lines.append("")
