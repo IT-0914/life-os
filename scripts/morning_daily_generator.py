@@ -563,66 +563,62 @@ def mark_tasks_migrated(tasks: list[dict]):
 # ============================================================
 # メイン処理
 # ============================================================
-def scan_previous_daily_and_sync(yesterday: datetime.date):
+def scan_previous_daily_and_sync(yesterday: datetime.date, page_text: str = ""):
     """
-    前日のデイリーノートのTODAYセクションをスキャンし、TASK DBに同期する
-    - チェック済み → STATUS=DONEでTASK DBに登録
-    - 未チェック → STATUS=TODO, MIGRATED=falseでTASK DBに登録
+    前日のデイリーノートのTODAYセクションをスキャンし、TASK DBに同期する。
+    page_text: fetch_yesterday_page()で取得済みのページ本文（省略時は再取得）
     """
     import glob
     weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
     weekday = weekdays_ja[yesterday.weekday()]
     title = f"{yesterday.strftime('%Y-%m-%d')}（{weekday}）"
 
-    print(f"[0/6] 前日（{title}）のデイリーをスキャン中...")
+    print(f"[0a/6] 前日（{title}）のTODAYセクションをTASK DBに同期中...")
 
-    # 前日のページを検索
-    cmd = [
-        "manus-mcp-cli", "tool", "call", "notion-search",
-        "--server", "notion",
-        "--input", json.dumps({"query": title}, ensure_ascii=False)
-    ]
-    subprocess.run(cmd, capture_output=True, text=True)
+    content = page_text
 
-    files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-search*.json"), reverse=True)
-    if not files:
-        print("      → 前日のデイリーが見つかりませんでした（スキップ）")
-        return
-
-    try:
-        with open(files[0]) as f:
-            data = json.load(f)
-        results = data.get("results", [])
-        page_url = ""
-        for r in results:
-            if title in r.get("title", ""):
-                page_url = r.get("url", "")
-                break
-        if not page_url:
-            print("      → 前日のデイリーページが見つかりませんでした（スキップ）")
+    if not content:
+        # 前日ページ本文が渡されていない場合は再取得
+        cmd = [
+            "manus-mcp-cli", "tool", "call", "notion-search",
+            "--server", "notion",
+            "--input", json.dumps({"query": title}, ensure_ascii=False)
+        ]
+        subprocess.run(cmd, capture_output=True, text=True)
+        files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-search*.json"), reverse=True)
+        if not files:
+            print("      → 前日のデイリーが見つかりませんでした（スキップ）")
             return
-    except Exception as e:
-        print(f"      → エラー: {e}")
-        return
-
-    # ページ本文を取得
-    cmd2 = [
-        "manus-mcp-cli", "tool", "call", "notion-fetch",
-        "--server", "notion",
-        "--input", json.dumps({"url": page_url}, ensure_ascii=False)
-    ]
-    subprocess.run(cmd2, capture_output=True, text=True)
-
-    files2 = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
-    if not files2:
-        return
-
-    try:
-        with open(files2[0]) as f:
-            data2 = json.load(f)
-        content = data2.get("result", "")
-    except Exception:
-        return
+        try:
+            with open(files[0]) as f:
+                data = json.load(f)
+            results = data.get("results", [])
+            page_url = ""
+            for r in results:
+                if title in r.get("title", ""):
+                    page_url = r.get("url", "")
+                    break
+            if not page_url:
+                print("      → 前日のデイリーページが見つかりませんでした（スキップ）")
+                return
+        except Exception as e:
+            print(f"      → エラー: {e}")
+            return
+        cmd2 = [
+            "manus-mcp-cli", "tool", "call", "notion-fetch",
+            "--server", "notion",
+            "--input", json.dumps({"url": page_url}, ensure_ascii=False)
+        ]
+        subprocess.run(cmd2, capture_output=True, text=True)
+        files2 = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
+        if not files2:
+            return
+        try:
+            with open(files2[0]) as f:
+                data2 = json.load(f)
+            content = data2.get("result", "")
+        except Exception:
+            return
 
     # TODAYセクションを抽出してチェックボックスをパース
     in_today = False
@@ -923,11 +919,15 @@ def update_home_page(today: datetime.date, daily_page_id: str):
         print(f"      → {HOME_PAGE_URL}")
 
 
-def scan_previous_daily_tags(yesterday: datetime.date, today_page_id: str = ""):
+def scan_previous_daily_tags(
+    yesterday: datetime.date,
+    today_page_id: str = "",
+    yesterday_page_id: str = "",
+    yesterday_page_text: str = ""
+):
     """
     前日のデイリーノートのタグ（#調査・#メール・#タスク）をスキャンして自動実行する。
-    処理結果は当日（翌日）のデイリーページに追記する。
-    scan_previous_daily_and_sync() の後、当日ページ作成後に呼び出す。
+    yesterday_page_id/text: fetch_yesterday_page()で取得済みの場合は再取得をスキップ。
     """
     if not TAG_PROCESSOR_AVAILABLE:
         print("      → tag_processor 未利用可能（スキップ）")
@@ -938,62 +938,62 @@ def scan_previous_daily_tags(yesterday: datetime.date, today_page_id: str = ""):
     title = f"{yesterday.strftime('%Y-%m-%d')}（{weekday}）"
     print(f"[0b/6] 前日（{title}）のタグをスキャン中...")
 
-    # 前日ページIDを取得
-    cmd = [
-        "manus-mcp-cli", "tool", "call", "notion-search",
-        "--server", "notion",
-        "--input", json.dumps({"query": title}, ensure_ascii=False)
-    ]
-    subprocess.run(cmd, capture_output=True, text=True)
-
-    files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-search*.json"), reverse=True)
-    if not files:
-        print("      → 前日ページが見つかりませんでした（スキップ）")
-        return
-
-    try:
-        with open(files[0]) as f:
-            data = json.load(f)
-        results = data.get("results", [])
-        page_id = ""
-        page_url = ""
-        for r in results:
-            if title in r.get("title", ""):
-                page_id = r.get("id", "")
-                page_url = r.get("url", "")
-                break
-        if not page_id:
-            print("      → 前日ページIDが取得できませんでした（スキップ）")
-            return
-    except Exception as e:
-        print(f"      → エラー: {e}")
-        return
-
-    # ページ本文を取得
-    cmd2 = [
-        "manus-mcp-cli", "tool", "call", "notion-fetch",
-        "--server", "notion",
-        "--input", json.dumps({"url": page_url}, ensure_ascii=False)
-    ]
-    subprocess.run(cmd2, capture_output=True, text=True)
-
-    files2 = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
-    if not files2:
-        print("      → ページ本文の取得に失敗しました（スキップ）")
-        return
-
-    try:
-        with open(files2[0]) as f:
-            data2 = json.load(f)
-        page_text = data2.get("result", "")
-    except Exception as e:
-        print(f"      → ページ本文パースエラー: {e}")
-        return
-
     # 当日ページIDがない場合はスキップ
     if not today_page_id:
         print("      → 当日ページIDが未設定（スキップ）")
         return
+
+    # 取得済みの前日ページ情報を利用（クレジット削減）
+    page_id = yesterday_page_id
+    page_text = yesterday_page_text
+
+    if not page_id or not page_text:
+        # 引数で渡されていない場合は再取得
+        cmd = [
+            "manus-mcp-cli", "tool", "call", "notion-search",
+            "--server", "notion",
+            "--input", json.dumps({"query": title}, ensure_ascii=False)
+        ]
+        subprocess.run(cmd, capture_output=True, text=True)
+        files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-search*.json"), reverse=True)
+        if not files:
+            print("      → 前日ページが見つかりませんでした（スキップ）")
+            return
+        try:
+            with open(files[0]) as f:
+                data = json.load(f)
+            results = data.get("results", [])
+            page_url = ""
+            for r in results:
+                if title in r.get("title", ""):
+                    page_id = r.get("id", "")
+                    page_url = r.get("url", "")
+                    break
+            if not page_id:
+                print("      → 前日ページIDが取得できませんでした（スキップ）")
+                return
+        except Exception as e:
+            print(f"      → エラー: {e}")
+            return
+        cmd2 = [
+            "manus-mcp-cli", "tool", "call", "notion-fetch",
+            "--server", "notion",
+            "--input", json.dumps({"url": page_url}, ensure_ascii=False)
+        ]
+        subprocess.run(cmd2, capture_output=True, text=True)
+        files2 = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
+        if not files2:
+            print("      → ページ本文の取得に失敗しました（スキップ）")
+            return
+        try:
+            with open(files2[0]) as f:
+                data2 = json.load(f)
+            page_text = data2.get("result", "")
+        except Exception as e:
+            print(f"      → ページ本文パースエラー: {e}")
+            return
+    else:
+        print("      → 取得済みページ情報を流用（再取得スキップ）")
 
     # タグ処理を実行（結果は当日ページに追記）
     yesterday_str = yesterday.strftime("%Y-%m-%d")
@@ -1014,6 +1014,64 @@ def scan_previous_daily_tags(yesterday: datetime.date, today_page_id: str = ""):
         print("      → タグなし（スキップ）")
 
 
+def fetch_yesterday_page(yesterday: datetime.date) -> tuple[str, str, str]:
+    """
+    前日のデイリーページを検索・取得して返す。
+    戻り値: (page_id, page_url, page_text)
+    前日ページが見つからない場合は ('', '', '') を返す。
+    """
+    weekdays_ja = ['月', '火', '水', '木', '金', '土', '日']
+    weekday = weekdays_ja[yesterday.weekday()]
+    title = f"{yesterday.strftime('%Y-%m-%d')}（{weekday}）"
+
+    # 検索
+    cmd = [
+        "manus-mcp-cli", "tool", "call", "notion-search",
+        "--server", "notion",
+        "--input", json.dumps({"query": title}, ensure_ascii=False)
+    ]
+    subprocess.run(cmd, capture_output=True, text=True)
+
+    files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-search*.json"), reverse=True)
+    if not files:
+        return ('', '', '')
+
+    try:
+        with open(files[0]) as f:
+            data = json.load(f)
+        results = data.get("results", [])
+        page_id, page_url = '', ''
+        for r in results:
+            if title in r.get("title", ""):
+                page_id = r.get("id", "")
+                page_url = r.get("url", "")
+                break
+        if not page_url:
+            return ('', '', '')
+    except Exception:
+        return ('', '', '')
+
+    # 本文取得
+    cmd2 = [
+        "manus-mcp-cli", "tool", "call", "notion-fetch",
+        "--server", "notion",
+        "--input", json.dumps({"url": page_url}, ensure_ascii=False)
+    ]
+    subprocess.run(cmd2, capture_output=True, text=True)
+
+    files2 = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
+    if not files2:
+        return (page_id, page_url, '')
+
+    try:
+        with open(files2[0]) as f:
+            data2 = json.load(f)
+        page_text = data2.get("result", data2.get("text", ""))
+        return (page_id, page_url, page_text)
+    except Exception:
+        return (page_id, page_url, '')
+
+
 def main():
     now = datetime.datetime.now(JST)
     today = now.date()
@@ -1021,8 +1079,16 @@ def main():
 
     print(f"=== LIFE OS デイリーノート生成 {today} ===")
 
-    # 0. 前日スキャン → TASK DB同期
-    scan_previous_daily_and_sync(yesterday)
+    # 0. 前日ページを一度だけ取得（クレジット削減：後続の検索・fetchを共有）
+    print(f"[0/6] 前日（{yesterday}）のページを取得中...")
+    yesterday_page_id, yesterday_page_url, yesterday_page_text = fetch_yesterday_page(yesterday)
+    if yesterday_page_url:
+        print(f"      → 前日ページ取得完了: {yesterday_page_url[:60]}")
+    else:
+        print("      → 前日ページが見つかりませんでした（スキップ）")
+
+    # 0a. TASK DB同期（取得済みページを利用）
+    scan_previous_daily_and_sync(yesterday, yesterday_page_text)
 
     # 1. 未完了タスク取得
     print("[1/6] 未完了タスクを取得中...")
@@ -1083,10 +1149,15 @@ def main():
         mark_tasks_migrated(pending_tasks)
 
     # 0b. 前日デイリーのタグ自動実行（当日ページに結果を追記）
-    scan_previous_daily_tags(yesterday, today_page_id=daily_page_id)
+    # 取得済みの前日ページ情報を流用して再取得をスキップ
+    scan_previous_daily_tags(
+        yesterday,
+        today_page_id=daily_page_id,
+        yesterday_page_id=yesterday_page_id,
+        yesterday_page_text=yesterday_page_text
+    )
 
-    # 8. ホームページの当日デイリーリンクを更新
-    update_home_page(today, daily_page_id)
+    # TODAY HOMEはクレジット削減のため廃止（update_home_pageは呼び出しない）
 
     print(f"\n✅ 完了: デイリーノート {today} を生成しました")
 
