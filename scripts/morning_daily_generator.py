@@ -80,6 +80,53 @@ def mcp_call_raw(tool: str, server: str, input_dict: dict) -> str:
     return result.stdout
 
 
+def mcp_call_file(tool: str, server: str, input_dict: dict) -> dict:
+    """
+    MCP CLIを呼び出し、実行後に新たに生成された結果ファイルを返す。
+    実行前後のファイルリスト差分で正確な結果ファイルを特定する。
+    保存先: notion系は /home/ubuntu/.mcp/tool-results/*.json
+              google-calendar系は /tmp/manus-mcp/mcp_result_*.json
+    """
+    # 実行前のファイルセットを記録（両方のディレクトリを監視）
+    notion_dir = "/home/ubuntu/.mcp/tool-results/"
+    tmp_dir = "/tmp/manus-mcp/"
+    before_notion = set(glob.glob(f"{notion_dir}*.json"))
+    before_tmp = set(glob.glob(f"{tmp_dir}mcp_result_*.json"))
+    
+    cmd = [
+        "manus-mcp-cli", "tool", "call", tool,
+        "--server", server,
+        "--input", json.dumps(input_dict, ensure_ascii=False)
+    ]
+    subprocess.run(cmd, capture_output=True, text=True)
+    
+    # 実行後の新ファイルを特定（両方のディレクトリを確認）
+    after_notion = set(glob.glob(f"{notion_dir}*.json"))
+    after_tmp = set(glob.glob(f"{tmp_dir}mcp_result_*.json"))
+    
+    new_files = sorted((after_notion - before_notion) | (after_tmp - before_tmp), reverse=True)
+    
+    if new_files:
+        try:
+            with open(new_files[0]) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    
+    # フォールバック: 最新ファイルを返す
+    all_files = sorted(
+        list(glob.glob(f"{notion_dir}*.json")) + list(glob.glob(f"{tmp_dir}mcp_result_*.json")),
+        reverse=True
+    )
+    if all_files:
+        try:
+            with open(all_files[0]) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
 # ============================================================
 # 1. 未完了タスクの取得（MIGRATION）
 # ============================================================
@@ -113,26 +160,9 @@ def get_pending_tasks() -> list[dict]:
 
 def get_pending_tasks_v2() -> list[dict]:
     """TASK DBからTODO・MIGRATED=falseのタスクをMCP経由で取得"""
-    import os
-    import glob
-    
-    cmd = [
-        "manus-mcp-cli", "tool", "call", "notion-fetch",
-        "--server", "notion",
-        "--input", json.dumps({
-            "url": f"collection://{TASK_DS_ID}"
-        }, ensure_ascii=False)
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
-    # 最新の結果ファイルを読む
-    files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
-    if not files:
-        return []
+    data = mcp_call_file("notion-fetch", "notion", {"id": f"collection://{TASK_DS_ID}"})
     
     try:
-        with open(files[0]) as f:
-            data = json.load(f)
         
         tasks = []
         result_text = data.get("result", "")
@@ -163,22 +193,9 @@ def get_pending_tasks_v2() -> list[dict]:
 # ============================================================
 def get_active_projects() -> list[dict]:
     """STATUS=ACTIVEのプロジェクトとそのTODOタスクを取得"""
-    import glob
-    
-    cmd = [
-        "manus-mcp-cli", "tool", "call", "notion-fetch",
-        "--server", "notion",
-        "--input", json.dumps({"url": f"collection://{PROJ_DS_ID}"}, ensure_ascii=False)
-    ]
-    subprocess.run(cmd, capture_output=True, text=True)
-    
-    files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
-    if not files:
-        return []
+    data = mcp_call_file("notion-fetch", "notion", {"id": f"collection://{PROJ_DS_ID}"})
     
     try:
-        with open(files[0]) as f:
-            data = json.load(f)
         
         projects = []
         result_text = data.get("result", "")
@@ -660,35 +677,223 @@ def scan_previous_daily_and_sync(yesterday: datetime.date):
         print(f"      [TODO] {name}")
 
 
+def get_week_events(today: datetime.date) -> dict:
+    """今日から翻日までの7日間のGoogleカレンダーイベントを取得。日付をキーにイベントリストを返す"""
+    week_end = today + datetime.timedelta(days=6)
+    time_min = f"{today.isoformat()}T00:00:00+09:00"
+    time_max = f"{week_end.isoformat()}T23:59:59+09:00"
+    
+    data = mcp_call_file("google_calendar_search_events", "google-calendar", {
+        "time_min": time_min,
+        "time_max": time_max,
+        "max_results": 50,
+        "calendar_id": "primary"
+    })
+    
+    # Google Calendarの結果が「unfinished tool call」の場合はスキップ
+    if data.get("message") == "This is an unfinished tool call. The actual API execution will be handled by the server.":
+        print("      [INFO] カレンダー：エージェント実行時に取得されます")
+        return {}
+    
+    try:
+        week_events = {}
+        # Google Calendarのresultキーは配列形式
+        items = data.get("result", data.get("events", data.get("items", [])))
+        if isinstance(items, list):
+            for item in items:
+                start = item.get("start", {})
+                start_time = start.get("dateTime", start.get("date", ""))
+                summary = item.get("summary", "（タイトルなし）")
+                
+                # 日付を取得
+                if "T" in start_time:
+                    dt = datetime.datetime.fromisoformat(start_time)
+                    date_key = dt.date().isoformat()
+                    time_str = dt.strftime("%H:%M")
+                else:
+                    date_key = start_time[:10] if start_time else ""
+                    time_str = "終日"
+                
+                if date_key:
+                    if date_key not in week_events:
+                        week_events[date_key] = []
+                    week_events[date_key].append({"time": time_str, "summary": summary})
+        
+        # 各日のイベントを時刻順にソート
+        for date_key in week_events:
+            week_events[date_key].sort(key=lambda x: x["time"] if x["time"] != "終日" else "00:00")
+        
+        return week_events
+    except Exception as e:
+        print(f"[WARN] 週間カレンダー取得エラー: {e}")
+        return {}
+
+
+def get_all_todo_tasks() -> list[dict]:
+    """
+    TASK DBの未完了タスク（STATUS=TODO/DOING）を全件取得。
+    notion-searchでTASK DB配下のページを取得し、各ページのpropertiesからSTATUSを確認する。
+    """
+    # STEP1: TASK DB配下の全ページを検索（data_source_urlでTASK DB配下に絞り込む）
+    search_data = mcp_call_file("notion-search", "notion", {
+        "query": " ",
+        "data_source_url": f"collection://{TASK_DS_ID}",
+        "page_size": 25
+    })
+    
+    try:
+        tasks = []
+        results = search_data.get("results", [])
+        
+        # TASK DB配下のページのみをフィルタリング
+        task_db_url = TASK_DB_URL.rstrip("/")
+        task_pages = []
+        for r in results:
+            page_url = r.get("url", "")
+            page_id = r.get("id", "")
+            # ページをfetchしてancestor-pathでTASK DB配下かどうか確認
+            task_pages.append({"id": page_id, "title": r.get("title", ""), "url": page_url})
+        
+        if not task_pages:
+            return []
+        
+        # STEP2: 各ページをfetchしてSTATUSを確認（最大20件まで）
+        for page_info in task_pages[:20]:
+            page_data = mcp_call_file("notion-fetch", "notion", {"id": page_info["id"]})
+            page_text = page_data.get("text", page_data.get("result", ""))
+            
+            # TASK DB配下のページか確認
+            if f"collection://{TASK_DS_ID}" not in page_text:
+                continue
+            
+            # properties JSONを抽出
+            props_match = re.search(r'<properties>\s*(\{.*?\})\s*</properties>', page_text, re.DOTALL)
+            if not props_match:
+                continue
+            
+            try:
+                props = json.loads(props_match.group(1))
+                status = props.get("STATUS", "")
+                task_name = props.get("TASK", page_info["title"])
+                task_url = props.get("url", page_info["url"])
+                
+                if status in ("TODO", "DOING") and task_name:
+                    tasks.append({"name": task_name, "url": task_url, "status": status})
+            except json.JSONDecodeError:
+                continue
+        
+        return tasks
+    except Exception as e:
+        print(f"[WARN] タスク取得エラー: {e}")
+        return []
+
+
 def update_home_page(today: datetime.date, daily_page_id: str):
     """
-    🏠 TODAY HOMEページの「今日のデイリー」セクションを当日のデイリーページへのリンクに更新する。
+    🏠 TODAY HOMEページを完全再構築する。
+    内容：当日デイリーリンク・1週間カレンダー・プロジェクト一覧・未完了タスク一覧
     """
-    print("[8/8] ホームページを更新中...")
+    print("[8/8] TODAY HOMEを再構築中...")
     weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
     weekday = weekdays_ja[today.weekday()]
     title = f"{today.strftime('%Y-%m-%d')}（{weekday}）"
     daily_url = f"https://www.notion.so/{daily_page_id.replace('-', '')}"
 
+    # --- 1週間カレンダーを取得 ---
+    print("      → 1週間カレンダーを取得中...")
+    week_events = get_week_events(today)
+
+    # --- 未完了タスクを取得 ---
+    print("      → 未完了タスクを取得中...")
+    all_tasks = get_all_todo_tasks()
+
+    # --- プロジェクトを取得（既存の関数を再利用） ---
+    print("      → プロジェクトを取得中...")
+    projects = get_active_projects()
+
+    # --- 1週間カレンダーセクションを構築 ---
+    cal_lines = ["## 📆 週間カレンダー"]
+    for i in range(7):
+        day = today + datetime.timedelta(days=i)
+        day_str = day.isoformat()
+        wd = weekdays_ja[day.weekday()]
+        day_label = f"{day.strftime('%m/%d')}({wd})"
+        is_today = (i == 0)
+        today_mark = " ◄ TODAY" if is_today else ""
+
+        day_events = week_events.get(day_str, [])
+        if day_events:
+            cal_lines.append(f"- **{day_label}{today_mark}**")
+            for ev in day_events:
+                cal_lines.append(f"  - {ev['time']} {ev['summary']}")
+        else:
+            cal_lines.append(f"- {day_label}　予定なし{today_mark}")
+    cal_section = "\n".join(cal_lines) + "\n"
+
+    # --- プロジェクトセクションを構築 ---
+    proj_lines = ["## 🚀 プロジェクト\n"]
+    if projects:
+        for pj in projects:
+            pj_name = pj['name']
+            pj_url = pj.get('url', '')
+            pj_progress = pj.get('progress', '0%')
+            pj_next = pj.get('next_action', '（未設定）')
+            if pj_url:
+                proj_lines.append(f"- [{pj_name}]({pj_url}) {pj_progress}")
+            else:
+                proj_lines.append(f"- {pj_name} {pj_progress}")
+            if pj_next and pj_next != '（未設定）':
+                proj_lines.append(f"  - → {pj_next}")
+    else:
+        proj_lines.append("アクティブなプロジェクトなし")
+    proj_section = "\n".join(proj_lines) + "\n"
+
+    # --- 未完了タスクセクションを構築 ---
+    task_lines = ["## ✅ 未完了タスク\n"]
+    if all_tasks:
+        doing_tasks = [t for t in all_tasks if t.get('status') == 'DOING']
+        todo_tasks = [t for t in all_tasks if t.get('status') == 'TODO']
+        if doing_tasks:
+            task_lines.append("**進行中 (DOING)**")
+            for t in doing_tasks:
+                if t.get('url'):
+                    task_lines.append(f"- [{t['name']}]({t['url']})")
+                else:
+                    task_lines.append(f"- {t['name']}")
+        if todo_tasks:
+            if doing_tasks:
+                task_lines.append("")
+            task_lines.append("**未着手 (TODO)**")
+            for t in todo_tasks:
+                if t.get('url'):
+                    task_lines.append(f"- [{t['name']}]({t['url']})")
+                else:
+                    task_lines.append(f"- {t['name']}")
+    else:
+        task_lines.append("未完了タスクなし 🎉")
+    task_section = "\n".join(task_lines) + "\n"
+
+    # --- ページ全体を構築 ---
     new_content = (
         f"# 🏠 TODAY HOME\n\n"
-        f"> 毎朝7:00に自動更新されます。このページを開くと当日のデイリーが表示されます。\n\n"
+        f"> 毎朝7:00に自動更新。当日デイリー・週間カレンダー・プロジェクト・未完了タスクを一元管理。\n\n"
         f"---\n\n"
         f"## 📅 今日のデイリー\n\n"
         f"[→ {title}のデイリーを開く]({daily_url})\n\n"
         f"---\n\n"
+        f"{cal_section}\n"
+        f"---\n\n"
+        f"{proj_section}\n"
+        f"---\n\n"
+        f"{task_section}\n"
+        f"---\n\n"
         f"## 💡 SORAタグの使い方\n\n"
-        f"デイリーページの **どこにでも** 以下の形式で書くだけで、**翌朝7:00に自動実行**されます。\n\n"
         f"| タグ | 書き方の例 | 実行されること |\n"
         f"|---|---|---|\n"
-        f"| `#調査` | `競合A社の最新動向を調べて #調査` | Web調査して翌日デイリーに結果を追記 |\n"
+        f"| `#調査` | `競合A社の最新動向を調べて #調査` | Web調査して翌日デイリーにSORA REPORTとして追記 |\n"
         f"| `#メール` | `田中部長に打ち合わせ調整 #メール` | Gmail下書きを作成（宛先は手動で設定） |\n"
         f"| `#タスク` | `LPのワイヤーフレームを作る #タスク` | TASK DBにTODOで自動登録 |\n\n"
-        f"**ルール:**\n"
-        f"- `<指示内容> #タグ名` の順（タグは末尾）\n"
-        f"- チェックボックス `- [ ]` の中でも使える\n"
-        f"- 1行に1タグ\n"
-        f"- 結果は翌日デイリーの `## 🤖 SORA REPORT` セクションに出力されます\n\n"
+        f"**ルール:** `<指示内容> #タグ名` の順（タグは末尾）・1行に1タグ\n\n"
         f"---\n\n"
         f"## 🗂 ナビゲーション\n\n"
         f"- [📅 DAILY一覧]({DAILY_DB_URL})\n"
@@ -697,53 +902,25 @@ def update_home_page(today: datetime.date, daily_page_id: str):
         f"- [🧠 LIFE OS TOP](https://www.notion.so/370200b3cc708115a943d66ec4ed1206)\n"
     )
 
-    # 前日のデイリーリンク行を当日に差し替え
-    # ホームページの現在のリンク行を取得して置換する
-    fetch_cmd = [
-        "manus-mcp-cli", "tool", "call", "notion-fetch",
+    # --- Notionページを完全上書き (replace_contentコマンドを使用) ---
+    cmd = [
+        "manus-mcp-cli", "tool", "call", "notion-update-page",
         "--server", "notion",
-        "--input", json.dumps({"id": HOME_PAGE_ID}, ensure_ascii=False)
+        "--input", json.dumps({
+            "page_id": HOME_PAGE_ID,
+            "command": "replace_content",
+            "new_str": new_content
+        }, ensure_ascii=False)
     ]
-    fetch_result = subprocess.run(fetch_cmd, capture_output=True, text=True)
-    
-    # 現在のリンク行を正規表現で検出
-    import re as _re
-    old_link_match = _re.search(
-        r'\[→ (\d{4}-\d{2}-\d{2}[^]]*?)\]\(https://www\.notion\.so/([a-f0-9]+)\)',
-        fetch_result.stdout
-    )
-    
-    if old_link_match:
-        old_full = old_link_match.group(0)
-        new_full = f"[→ {title}のデイリーを開く]({daily_url})"
-        update_cmd = [
-            "manus-mcp-cli", "tool", "call", "notion-update-page",
-            "--server", "notion",
-            "--input", json.dumps({
-                "page_id": HOME_PAGE_ID,
-                "command": "update_content",
-                "content_updates": [
-                    {"old_str": old_full, "new_str": new_full}
-                ]
-            }, ensure_ascii=False)
-        ]
-        subprocess.run(update_cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    if result.returncode == 0:
+        print(f"      → TODAY HOME更新完了: {title}")
+        print(f"      → カレンダー: {len(week_events)}日分 / プロジェクト: {len(projects)}件 / 未完了タスク: {len(all_tasks)}件")
+        print(f"      → {HOME_PAGE_URL}")
     else:
-        # リンク行が見つからない場合は末尾に追記
-        insert_cmd = [
-            "manus-mcp-cli", "tool", "call", "notion-update-page",
-            "--server", "notion",
-            "--input", json.dumps({
-                "page_id": HOME_PAGE_ID,
-                "command": "insert_content",
-                "insert_after": "今日のデイリー",
-                "content": f"[→ {title}のデイリーを開く]({daily_url})"
-            }, ensure_ascii=False)
-        ]
-        subprocess.run(insert_cmd, capture_output=True, text=True)
-    
-    print(f"      → ホームページを {title} のリンクに更新しました")
-    print(f"      → {HOME_PAGE_URL}")
+        print(f"      [WARN] TODAY HOME更新失敗: {result.stderr[:200]}")
+        print(f"      → {HOME_PAGE_URL}")
 
 
 def scan_previous_daily_tags(yesterday: datetime.date, today_page_id: str = ""):
