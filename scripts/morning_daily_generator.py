@@ -1157,7 +1157,8 @@ def main():
         yesterday_page_text=yesterday_page_text
     )
 
-    # TODAY HOMEはクレジット削減のため廃止（update_home_pageは呼び出しない）
+    # TODAY HOME更新（週間カレンダー・プロジェクト・未完了タスクを一元表示）
+    update_home_page(today, daily_page_id)
 
     print(f"\n✅ 完了: デイリーノート {today} を生成しました")
 
