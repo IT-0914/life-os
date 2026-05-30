@@ -14,6 +14,17 @@ import json
 import datetime
 import re
 import sys
+import os
+import glob
+
+# タグ処理モジュール（同ディレクトリに配置）
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from tag_processor import process_tags_in_daily
+    TAG_PROCESSOR_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARN] tag_processor をインポートできません: {e}")
+    TAG_PROCESSOR_AVAILABLE = False
 
 # ============================================================
 # 設定
@@ -640,6 +651,83 @@ def scan_previous_daily_and_sync(yesterday: datetime.date):
         print(f"      [TODO] {name}")
 
 
+def scan_previous_daily_tags(yesterday: datetime.date):
+    """
+    前日のデイリーノートのタグ（#調査・#メール・#タスク）をスキャンして自動実行する。
+    scan_previous_daily_and_sync() の後に呼び出す。
+    """
+    if not TAG_PROCESSOR_AVAILABLE:
+        print("      → tag_processor 未利用可能（スキップ）")
+        return
+
+    weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
+    weekday = weekdays_ja[yesterday.weekday()]
+    title = f"{yesterday.strftime('%Y-%m-%d')}（{weekday}）"
+    print(f"[0b/6] 前日（{title}）のタグをスキャン中...")
+
+    # 前日ページIDを取得
+    cmd = [
+        "manus-mcp-cli", "tool", "call", "notion-search",
+        "--server", "notion",
+        "--input", json.dumps({"query": title}, ensure_ascii=False)
+    ]
+    subprocess.run(cmd, capture_output=True, text=True)
+
+    files = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-search*.json"), reverse=True)
+    if not files:
+        print("      → 前日ページが見つかりませんでした（スキップ）")
+        return
+
+    try:
+        with open(files[0]) as f:
+            data = json.load(f)
+        results = data.get("results", [])
+        page_id = ""
+        page_url = ""
+        for r in results:
+            if title in r.get("title", ""):
+                page_id = r.get("id", "")
+                page_url = r.get("url", "")
+                break
+        if not page_id:
+            print("      → 前日ページIDが取得できませんでした（スキップ）")
+            return
+    except Exception as e:
+        print(f"      → エラー: {e}")
+        return
+
+    # ページ本文を取得
+    cmd2 = [
+        "manus-mcp-cli", "tool", "call", "notion-fetch",
+        "--server", "notion",
+        "--input", json.dumps({"url": page_url}, ensure_ascii=False)
+    ]
+    subprocess.run(cmd2, capture_output=True, text=True)
+
+    files2 = sorted(glob.glob("/home/ubuntu/.mcp/tool-results/*notion-fetch*.json"), reverse=True)
+    if not files2:
+        print("      → ページ本文の取得に失敗しました（スキップ）")
+        return
+
+    try:
+        with open(files2[0]) as f:
+            data2 = json.load(f)
+        page_text = data2.get("result", "")
+    except Exception as e:
+        print(f"      → ページ本文パースエラー: {e}")
+        return
+
+    # タグ処理を実行
+    processed = process_tags_in_daily(page_id, page_text, TASK_DS_ID, PROJ_DS_ID)
+    if processed:
+        print(f"      → {len(processed)}件のタグを処理しました")
+        for item in processed:
+            status_icon = "✅" if item.get("status") == "success" else "❌"
+            print(f"         {status_icon} {item['tag']} : {item['instruction'][:30]}")
+    else:
+        print("      → タグなし（スキップ）")
+
+
 def main():
     now = datetime.datetime.now(JST)
     today = now.date()
@@ -649,6 +737,9 @@ def main():
 
     # 0. 前日スキャン → TASK DB同期
     scan_previous_daily_and_sync(yesterday)
+
+    # 0b. 前日デイリーのタグ自動実行（#調査・#メール・#タスク）
+    scan_previous_daily_tags(yesterday)
 
     # 1. 未完了タスク取得
     print("[1/6] 未完了タスクを取得中...")

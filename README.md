@@ -20,6 +20,10 @@ LIFE OS v01 は、Notionを唯一の操作起点とし、GTD（Getting Things Do
 
 夜間スキャンは廃止し、前日スキャン・TASK DB同期・当日デイリー生成をすべて朝7:00の1回の実行に統合しています。
 
+**タグによる自動実行（#調査・#メール・#タスク）**
+
+デイリーノートのどこにでも `<指示> #タグ` 形式で書くだけで、翌朝7:00に自動実行されます。
+
 ---
 
 ## 自動化フロー（毎朝7:00 JST）
@@ -28,6 +32,11 @@ LIFE OS v01 は、Notionを唯一の操作起点とし、GTD（Getting Things Do
 [0] 前日のデイリーTODAYをスキャン → TASK DBに同期
     チェック済み → STATUS=DONE で登録
     未チェック  → STATUS=TODO, MIGRATED=false で登録
+
+[0b] 前日デイリーのタグを自動実行（tag_processor）
+    <指示> #調査 → Web調査して結果をページに追記
+    <指示> #メール → Gmail下書きを作成してページに記録
+    <指示> #タスク → TASK DBに自動登録してページに記録
 
 [1] TASK DBから未完了タスクを取得（翌日への引き継ぎ）
 
@@ -80,7 +89,8 @@ LIFE OS v01 は、Notionを唯一の操作起点とし、GTD（Getting Things Do
 | `DESIGN.md` | システム詳細設計書（アーキテクチャ・GTD×BJ思想） |
 | `SCHEMA.md` | Notion データベーススキーマ定義 |
 | `FLOW.md` | 朝7:00の自動化プロセス詳細 |
-| `scripts/morning_daily_generator.py` | 朝7:00の統合スクリプト（前日スキャン＋デイリー生成） |
+| `scripts/morning_daily_generator.py` | 朝7:00の統合スクリプト（前日スキャン＋タグ処理＋デイリー生成） |
+| `scripts/tag_processor.py` | タグ自動実行モジュール（#調査・#メール・#タスク） |
 | `scripts/life_os_runner.py` | 統合ランナー（Manusスケジュールから呼び出す） |
 | `scripts/evening_task_scanner.py` | 廃止済み（参考アーカイブとして保存） |
 
