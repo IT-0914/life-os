@@ -29,14 +29,16 @@ except ImportError as e:
 # ============================================================
 # 設定
 # ============================================================
-DAILY_DS_ID  = "f9b89321-f903-4167-b022-0787096ea6f3"
-TASK_DS_ID   = "47ae00b4-956c-4fa4-a786-af39a5b33067"
-PROJ_DS_ID   = "eadd59d6-f0d5-4356-bc13-76aeab13c0ec"
-DAILY_DB_ID  = "77de58c499d14be9817ebd539c551eb0"
-DAILY_DB_URL = "https://www.notion.so/77de58c499d14be9817ebd539c551eb0"
-TASK_DB_URL  = "https://www.notion.so/6135d9e113d64fba81c4d12d3ac24bfe"
-PROJ_DB_URL  = "https://www.notion.so/ae6d2424256c47249c5cdccf644560bc"
-DB_HUB_URL   = "https://www.notion.so/370200b3cc70817d9fcad1c4190f79fe"
+DAILY_DS_ID   = "f9b89321-f903-4167-b022-0787096ea6f3"
+TASK_DS_ID    = "47ae00b4-956c-4fa4-a786-af39a5b33067"
+PROJ_DS_ID    = "eadd59d6-f0d5-4356-bc13-76aeab13c0ec"
+DAILY_DB_ID   = "77de58c499d14be9817ebd539c551eb0"
+DAILY_DB_URL  = "https://www.notion.so/77de58c499d14be9817ebd539c551eb0"
+TASK_DB_URL   = "https://www.notion.so/6135d9e113d64fba81c4d12d3ac24bfe"
+PROJ_DB_URL   = "https://www.notion.so/ae6d2424256c47249c5cdccf644560bc"
+DB_HUB_URL    = "https://www.notion.so/370200b3cc70817d9fcad1c4190f79fe"
+HOME_PAGE_ID  = "370200b3cc7081a6ba0debd25cdf34d2"  # 🏠 TODAY HOME
+HOME_PAGE_URL = "https://www.notion.so/370200b3cc7081a6ba0debd25cdf34d2"
 
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
@@ -445,6 +447,13 @@ def build_daily_content(
     lines.append("")
     lines.append("（自由記述 — ミーティングメモ・気づき・感情・何でも）")
     lines.append("")
+
+    # ── SORA TAG HINT ──
+    lines.append("> 💡 **SORAタグ** — このページのどこにでも書くだけで翌朝7:00に自動実行されます")
+    lines.append("> - `<調べたいこと> #調査` → Web調査して翌日デイリーに結果を追記")
+    lines.append("> - `<送りたい内容> #メール` → Gmail下書きを自動作成")
+    lines.append("> - `<やること> #タスク` → TASK DBに自動登録")
+    lines.append("")
     
     # ── WEEKLY REVIEW（金曜のみ）──
     if is_friday:
@@ -651,6 +660,92 @@ def scan_previous_daily_and_sync(yesterday: datetime.date):
         print(f"      [TODO] {name}")
 
 
+def update_home_page(today: datetime.date, daily_page_id: str):
+    """
+    🏠 TODAY HOMEページの「今日のデイリー」セクションを当日のデイリーページへのリンクに更新する。
+    """
+    print("[8/8] ホームページを更新中...")
+    weekdays_ja = ["月", "火", "水", "木", "金", "土", "日"]
+    weekday = weekdays_ja[today.weekday()]
+    title = f"{today.strftime('%Y-%m-%d')}（{weekday}）"
+    daily_url = f"https://www.notion.so/{daily_page_id.replace('-', '')}"
+
+    new_content = (
+        f"# 🏠 TODAY HOME\n\n"
+        f"> 毎朝7:00に自動更新されます。このページを開くと当日のデイリーが表示されます。\n\n"
+        f"---\n\n"
+        f"## 📅 今日のデイリー\n\n"
+        f"[→ {title}のデイリーを開く]({daily_url})\n\n"
+        f"---\n\n"
+        f"## 💡 SORAタグの使い方\n\n"
+        f"デイリーページの **どこにでも** 以下の形式で書くだけで、**翌朝7:00に自動実行**されます。\n\n"
+        f"| タグ | 書き方の例 | 実行されること |\n"
+        f"|---|---|---|\n"
+        f"| `#調査` | `競合A社の最新動向を調べて #調査` | Web調査して翌日デイリーに結果を追記 |\n"
+        f"| `#メール` | `田中部長に打ち合わせ調整 #メール` | Gmail下書きを作成（宛先は手動で設定） |\n"
+        f"| `#タスク` | `LPのワイヤーフレームを作る #タスク` | TASK DBにTODOで自動登録 |\n\n"
+        f"**ルール:**\n"
+        f"- `<指示内容> #タグ名` の順（タグは末尾）\n"
+        f"- チェックボックス `- [ ]` の中でも使える\n"
+        f"- 1行に1タグ\n"
+        f"- 結果は翌日デイリーの `## 🤖 SORA REPORT` セクションに出力されます\n\n"
+        f"---\n\n"
+        f"## 🗂 ナビゲーション\n\n"
+        f"- [📅 DAILY一覧]({DAILY_DB_URL})\n"
+        f"- [✅ TASK]({TASK_DB_URL})\n"
+        f"- [🚀 PROJECT]({PROJ_DB_URL})\n"
+        f"- [🧠 LIFE OS TOP](https://www.notion.so/370200b3cc708115a943d66ec4ed1206)\n"
+    )
+
+    # 前日のデイリーリンク行を当日に差し替え
+    # ホームページの現在のリンク行を取得して置換する
+    fetch_cmd = [
+        "manus-mcp-cli", "tool", "call", "notion-fetch",
+        "--server", "notion",
+        "--input", json.dumps({"id": HOME_PAGE_ID}, ensure_ascii=False)
+    ]
+    fetch_result = subprocess.run(fetch_cmd, capture_output=True, text=True)
+    
+    # 現在のリンク行を正規表現で検出
+    import re as _re
+    old_link_match = _re.search(
+        r'\[→ (\d{4}-\d{2}-\d{2}[^]]*?)\]\(https://www\.notion\.so/([a-f0-9]+)\)',
+        fetch_result.stdout
+    )
+    
+    if old_link_match:
+        old_full = old_link_match.group(0)
+        new_full = f"[→ {title}のデイリーを開く]({daily_url})"
+        update_cmd = [
+            "manus-mcp-cli", "tool", "call", "notion-update-page",
+            "--server", "notion",
+            "--input", json.dumps({
+                "page_id": HOME_PAGE_ID,
+                "command": "update_content",
+                "content_updates": [
+                    {"old_str": old_full, "new_str": new_full}
+                ]
+            }, ensure_ascii=False)
+        ]
+        subprocess.run(update_cmd, capture_output=True, text=True)
+    else:
+        # リンク行が見つからない場合は末尾に追記
+        insert_cmd = [
+            "manus-mcp-cli", "tool", "call", "notion-update-page",
+            "--server", "notion",
+            "--input", json.dumps({
+                "page_id": HOME_PAGE_ID,
+                "command": "insert_content",
+                "insert_after": "今日のデイリー",
+                "content": f"[→ {title}のデイリーを開く]({daily_url})"
+            }, ensure_ascii=False)
+        ]
+        subprocess.run(insert_cmd, capture_output=True, text=True)
+    
+    print(f"      → ホームページを {title} のリンクに更新しました")
+    print(f"      → {HOME_PAGE_URL}")
+
+
 def scan_previous_daily_tags(yesterday: datetime.date, today_page_id: str = ""):
     """
     前日のデイリーノートのタグ（#調査・#メール・#タスク）をスキャンして自動実行する。
@@ -812,6 +907,9 @@ def main():
 
     # 0b. 前日デイリーのタグ自動実行（当日ページに結果を追記）
     scan_previous_daily_tags(yesterday, today_page_id=daily_page_id)
+
+    # 8. ホームページの当日デイリーリンクを更新
+    update_home_page(today, daily_page_id)
 
     print(f"\n✅ 完了: デイリーノート {today} を生成しました")
 

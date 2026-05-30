@@ -1,0 +1,53 @@
+flowchart TD
+    %% TAKUMIの操作
+    T1["📱 Notionホームページを開く"]
+    T2["当日デイリーページを確認"]
+    T3["✅ TODAYタスクを実行・チェック"]
+    T4["📝 LOGに自由記述"]
+    T5["💡 タグを書く\n例: 競合調査して #調査\n例: 田中部長に連絡 #メール\n例: LP作成 #タスク"]
+
+    T1 --> T2 --> T3 --> T4 --> T5
+
+    %% 翌朝7:00 SORA自動実行
+    T5 -->|"翌朝7:00 自動実行"| S0
+
+    S0["STEP 0\n前日TODAYをスキャン\n✅→DONE / □→TODO\nTASK DBに同期"]
+    S1["STEP 1\nTASK DBから未完了タスク取得\n（引き継ぎ）"]
+    S2["STEP 2\nPROJECT DBから\nACTIVEプロジェクト取得"]
+    S3["STEP 3\nGoogleカレンダーから\n当日イベント取得"]
+    S4["STEP 4\n当日デイリーページを作成"]
+    S5["STEP 5\nミーティングサブページ作成"]
+    S6["STEP 6\n本文コンテンツ生成・更新\nSCHEDULE / TODAY / LOG\nSORAタグヒント / WEEKLY REVIEW"]
+    S7["STEP 7\nMIGRATEDフラグ更新"]
+    S8["STEP 0b タグ処理\n#調査 / #メール / #タスク\n→ 当日ページにSORA REPORT追記"]
+    S9["ホームページの\n当日デイリーリンクを更新"]
+
+    S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9
+
+    %% タグ処理の詳細
+    S8 --> TAG1["🔍 #調査\nDuckDuckGoで検索\n→ 結果を当日ページに追記"]
+    S8 --> TAG2["📧 #メール\nGmail下書きを作成\n→ 当日ページに記録"]
+    S8 --> TAG3["✅ #タスク\nTASK DBにTODO登録\n→ 当日ページに記録"]
+
+    %% 外部サービス
+    S3 --> EX1["🗓 Google Calendar"]
+    TAG2 --> EX2["📨 Gmail"]
+    TAG1 --> EX3["🌐 DuckDuckGo API"]
+    TAG3 --> DB2["✅ TASK DB"]
+
+    %% ホームページ → デイリーへ
+    S9 --> HOME["🏠 HOME PAGE\n当日デイリーへの直リンク"]
+    HOME -->|"開くと当日ページへ"| T2
+
+    %% スタイル
+    classDef takumi fill:#dbeafe,stroke:#3b82f6
+    classDef sora fill:#f3e8ff,stroke:#9333ea
+    classDef tag fill:#fef9c3,stroke:#ca8a04
+    classDef notion fill:#dcfce7,stroke:#16a34a
+    classDef ext fill:#fee2e2,stroke:#dc2626
+
+    class T1,T2,T3,T4,T5 takumi
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9 sora
+    class TAG1,TAG2,TAG3 tag
+    class HOME,DB2 notion
+    class EX1,EX2,EX3 ext
