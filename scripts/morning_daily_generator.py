@@ -157,30 +157,15 @@ def get_pending_tasks() -> list[dict]:
 
 
 def get_pending_tasks_v2() -> list[dict]:
-    """TASK DBからTODO・MIGRATED=falseのタスクをMCP経由で取得"""
-    data = mcp_call_file("notion-fetch", "notion", {"id": f"collection://{TASK_DS_ID}"})
-    
+    """playbookが保存した /tmp/today_tasks.json を読み込む"""
     try:
-        
-        tasks = []
-        result_text = data.get("result", "")
-        
-        # テーブル行からタスクを抽出
-        for line in result_text.split("\n"):
-            if "| " in line and "TODO" in line and "__NO__" in line:
-                parts = [p.strip() for p in line.split("|") if p.strip()]
-                if parts:
-                    # URLからページIDを取得
-                    url_match = re.search(r'https://www\.notion\.so/([a-f0-9]+)', line)
-                    page_url = url_match.group(0) if url_match else ""
-                    task_name = parts[0].replace("[", "").replace("]", "")
-                    # リンク形式 [name](url) をパース
-                    link_match = re.match(r'\[([^\]]+)\]\(([^)]+)\)', parts[0])
-                    if link_match:
-                        task_name = link_match.group(1)
-                        page_url = link_match.group(2)
-                    tasks.append({"name": task_name, "url": page_url})
+        with open("/tmp/today_tasks.json", "r", encoding="utf-8") as f:
+            tasks = json.load(f)
+        print(f"[INFO] 引き継ぎタスク: {len(tasks)}件")
         return tasks
+    except FileNotFoundError:
+        print("[WARN] /tmp/today_tasks.json が見つかりません（playbookのSTEP 3未実行）")
+        return []
     except Exception as e:
         print(f"[WARN] タスク取得エラー: {e}")
         return []
@@ -190,39 +175,29 @@ def get_pending_tasks_v2() -> list[dict]:
 # 2. プロジェクト情報の取得
 # ============================================================
 def get_active_projects() -> list[dict]:
-    """STATUS=ACTIVEのプロジェクトとそのTODOタスクを取得"""
-    data = mcp_call_file("notion-fetch", "notion", {"id": f"collection://{PROJ_DS_ID}"})
-    
+    """playbookが保存した /tmp/today_projects.json を読み込む"""
     try:
-        
+        with open("/tmp/today_projects.json", "r", encoding="utf-8") as f:
+            raw = json.load(f)
         projects = []
-        result_text = data.get("result", "")
-        
-        for line in result_text.split("\n"):
-            if "| " in line and "ACTIVE" in line:
-                parts = [p.strip() for p in line.split("|") if p.strip()]
-                if len(parts) >= 4:
-                    link_match = re.match(r'\[([^\]]+)\]\(([^)]+)\)', parts[0])
-                    name = link_match.group(1) if link_match else parts[0]
-                    url = link_match.group(2) if link_match else ""
-                    
-                    # PROGRESS と NEXT ACTION を探す
-                    progress = ""
-                    next_action = ""
-                    for p in parts:
-                        if re.match(r'^\d+(\.\d+)?$', p):
-                            progress = f"{int(float(p))}%"
-                        elif p and p not in ["ACTIVE", name] and not re.match(r'^https?://', p):
-                            if len(p) > 3:
-                                next_action = p
-                    
-                    projects.append({
-                        "name": name,
-                        "url": url,
-                        "progress": progress or "0%",
-                        "next_action": next_action or "（未設定）"
-                    })
+        for p in raw:
+            # progressが数値の場合は%文字列に変換
+            progress_val = p.get("progress", 0)
+            if isinstance(progress_val, (int, float)):
+                progress = f"{int(float(progress_val))}%"
+            else:
+                progress = str(progress_val)
+            projects.append({
+                "name": p.get("name", ""),
+                "url": p.get("url", ""),
+                "progress": progress,
+                "next_action": p.get("next_action", "（未設定）") or "（未設定）"
+            })
+        print(f"[INFO] ACTIVEプロジェクト: {len(projects)}件")
         return projects
+    except FileNotFoundError:
+        print("[WARN] /tmp/today_projects.json が見つかりません（playbookのSTEP 3未実行）")
+        return []
     except Exception as e:
         print(f"[WARN] プロジェクト取得エラー: {e}")
         return []
